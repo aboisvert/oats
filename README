@@ -1,0 +1,11 @@
+A simple Scala command-line OAuth proxy.
+
+(Currently only supports OAuth version 1.0 URL signing)
+
+Usage:
+
+    scala oats.scala LOCAL_PORT DESTINATION_HOST OAUTH_KEY OAUTH_SECRET
+
+e.g.,
+
+    scala oats.scala 8081 api.example.com k1234567890 dd50701259518fddb730
