@@ -76,10 +76,8 @@ class OAuthSign(key: String, secret: String) {
       sb.append(method)
       sb.append("&")
       sb.append(urlEncode(url))
-      for ((k, v) <- params) {
-        sb.append("&")
-        sb.append(urlEncode(urlEncode(k) + "=" + urlEncode(v)))
-      }
+      sb.append("&")
+      sb.append(urlEncode(params.toSeq.sorted map { case (k, v) => k + "=" + v } mkString "&"))
       sb.toString
     }
     val base = canonicalize(method, requestUrl, requestParams)
@@ -99,6 +97,7 @@ class OAuthSign(key: String, secret: String) {
  *  signed requests to `host`.
  */
 class Oats(
+  val https: Boolean,
   val port: Int,
   val host: String,
   val sign: OAuthSign
@@ -163,7 +162,7 @@ class Oats(
         println("body:\n%s\n" format (new String(body.get)))
       }
 
-      val signed = oauth.sign(method, "http://" + host + path, params)
+      val signed = oauth.sign(method, (if (https) "https://" else "http://") + host + path, params)
       println("signed: " + signed)
 
       val patchedHeaders = headers map {
@@ -171,7 +170,9 @@ class Oats(
         case other => other
       }
 
-      val response = http(method, signed, headers, body)
+      println("patchedHeaders:\n%s\n" format (patchedHeaders mkString "\n"))
+
+      val response = http(method, signed, patchedHeaders, body)
       println("Response:")
       println(response)
 
@@ -189,6 +190,8 @@ class Oats(
     val result = new StringBuilder()
     val conn = new URL(url).openConnection().asInstanceOf[HttpURLConnection]
     try {
+      conn.setInstanceFollowRedirects(true)
+      HttpURLConnection.setFollowRedirects(true)
       conn.setRequestMethod(method)
       for ((k, v) <- headers) {
         conn.setRequestProperty(k, v)
@@ -229,16 +232,25 @@ class Oats(
 }
 
 // command-line parsing
-if (args.size != 4) {
-  println("Usage:  scala oats [LOCAL_PORT] [DESTINATION_HOST] [OAUTH_KEY] [OAUTH_SECRET]")
+if (args.size != 5) {
+  println("Usage:  scala oats [HTTP/HTTPS] [LOCAL_PORT] [DESTINATION_HOST] [OAUTH_KEY] [OAUTH_SECRET]")
   System.exit(1)
 }
-val port   = args(0).toInt
-val host   = args(1)
-val key    = args(2)
-val secret = args(3)
+
+val https  = args(0).toLowerCase match {
+  case "http"  => false
+  case "https" => true
+  case _ =>
+    println("Expected value 'http' or 'https'");
+    System.exit(1);
+    sys.error("unreachable")
+}
+val port   = args(1).toInt
+val host   = args(2)
+val key    = args(3)
+val secret = args(4)
 
 // application kickoff
 val oauth = new OAuthSign(key, secret)
-new Oats(port, host, oauth)
+new Oats(https, port, host, oauth)
 
