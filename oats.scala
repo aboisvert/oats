@@ -36,6 +36,10 @@ object HTTPUtils {
     sb.toString
   }
 
+  def headerEncode(name: String, params: Map[String, String]): String = {
+    name + " " + (params map { case (k, v) => k + "=\"" + urlEncode(v) + "\"" } mkString ", ")
+  }
+
   /** Split a string in two parts at first `delim` character */
   def split(s: String, delim: Char) = {
     val pos = s.indexOf(delim)
@@ -59,15 +63,26 @@ class OAuthSign(key: String, secret: String) {
 
   private val random = new Random(System.nanoTime)
 
+  protected def newOAuthParams = Map(
+    "oauth_consumer_key"     -> key,
+    "oauth_version"          -> "1.0",
+    "oauth_signature_method" -> "HMAC-SHA1",
+    "oauth_timestamp"        -> timestamp,
+    "oauth_nonce"            -> nonce
+  )
+
+  def header(method: String, requestUrl: String, params: Map[String, String]) = {
+    val oauth = newOAuthParams
+    headerEncode("OAuth", oauth + signatureParam(method, requestUrl, params ++ oauth))
+  }
+
   def sign(method: String, requestUrl: String, params: Map[String, String]) = {
-    val partial = params +
-      ("oauth_consumer_key" -> key) +
-      ("oauth_version"      -> "1.0") +
-      ("oauth_signature_method" -> "HMAC-SHA1") +
-      ("oauth_timestamp" -> timestamp) +
-      ("oauth_nonce" -> nonce)
-    val full = partial +  ("oauth_signature" -> signature(method, requestUrl, partial))
-    urlEncode(requestUrl, full)
+    val oauth = newOAuthParams
+    urlEncode(requestUrl, params ++ oauth + signatureParam(method, requestUrl, params ++ oauth))
+  }
+
+  protected def signatureParam(method: String, requestUrl: String, params: Map[String, String]) = {
+    "oauth_signature" -> signature(method, requestUrl, params)
   }
 
   protected def signature(method: String, requestUrl: String, requestParams: Map[String, String]) = {
@@ -97,10 +112,11 @@ class OAuthSign(key: String, secret: String) {
  *  signed requests to `host`.
  */
 class Oats(
-  val https: Boolean,
   val port: Int,
   val host: String,
-  val sign: OAuthSign
+  val sign: OAuthSign,
+  val https: Boolean,
+  val oauthHeader: Boolean
 ) {
   private val HTTPRequest = """([^ ]+) (\/.*) HTTP.*""".r
 
@@ -133,13 +149,13 @@ class Oats(
       println("path: %s" format path)
       println("params:\n%s\n" format (params mkString "\n"))
 
-      val headers = {
+      var headers = {
         @tailrec def read(headers: Map[String, String] = Map.empty): Map[String, String] = {
           val header = in.readLine()
           if (header != null && header != "") read(headers + splitHeader(header, ':'))
           else headers
         }
-        read()
+        mutable.Map() ++ read()
       }
       println("headers:\n%s\n" format (headers mkString "\n"))
 
@@ -162,17 +178,21 @@ class Oats(
         println("body:\n%s\n" format (new String(body.get)))
       }
 
-      val signed = oauth.sign(method, (if (https) "https://" else "http://") + host + path, params)
-      println("signed: " + signed)
-
-      val patchedHeaders = headers map {
-        case (k, v) if k == "Host" => k -> host
-        case other => other
+      val url = if (!oauthHeader) {
+        val signed = oauth.sign(method, (if (https) "https://" else "http://") + host + path, params)
+        println("signed: " + signed)
+        signed
+      } else {
+        val line = oauth.header(method, (if (https) "https://" else "http://") + host + path, params)
+        headers("Authorization") = line
+        urlEncode((if (https) "https://" else "http://") + host + path, params)
       }
 
-      println("patchedHeaders:\n%s\n" format (patchedHeaders mkString "\n"))
+      headers("Host") = host
 
-      val response = http(method, signed, patchedHeaders, body)
+      println("Headers:\n%s\n" format (headers mkString "\n"))
+
+      val response = http(method, url, headers, body)
       println("Response:")
       println(response)
 
@@ -232,25 +252,26 @@ class Oats(
 }
 
 // command-line parsing
-if (args.size != 5) {
-  println("Usage:  scala oats [HTTP/HTTPS] [LOCAL_PORT] [DESTINATION_HOST] [OAUTH_KEY] [OAUTH_SECRET]")
+if (args.size != 3) {
+  println("Usage:  scala oats [DESTINATION_HOST] [OAUTH_KEY] [OAUTH_SECRET]")
+  println()
+  println("Optional parameters:")
+  println()
+  println("  -Dport=8081           #  Local port to listen")
+  println("  -Dhttps=true          #  Set to true if using HTTPS")
+  println("  -Doauth.header=true   #  Pass OAuth authorization header instead of URL params")
+  println()
   System.exit(1)
 }
 
-val https  = args(0).toLowerCase match {
-  case "http"  => false
-  case "https" => true
-  case _ =>
-    println("Expected value 'http' or 'https'");
-    System.exit(1);
-    sys.error("unreachable")
-}
-val port   = args(1).toInt
-val host   = args(2)
-val key    = args(3)
-val secret = args(4)
+val https  = System.getProperty("https", "false").equalsIgnoreCase("true")
+val header = System.getProperty("oauth.header", "false").equalsIgnoreCase("true")
+val port   = System.getProperty("port", "8081").toInt
+val host   = args(0)
+val key    = args(1)
+val secret = args(2)
 
 // application kickoff
 val oauth = new OAuthSign(key, secret)
-new Oats(https, port, host, oauth)
+new Oats(port, host, oauth, https, header)
 
