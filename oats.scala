@@ -105,7 +105,7 @@ class OAuthSign(key: String, secret: String) {
 
   protected def timestamp = (System.currentTimeMillis / 1000L).toString
 
-  protected def nonce = random.nextLong.toString
+  protected def nonce = math.abs(random.nextLong).toString
 }
 
 /** A simple OAuth proxy; listens on `port` for HTTP requests and forwards
