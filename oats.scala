@@ -22,7 +22,26 @@ import scala.collection.mutable.ArrayBuffer
 object HTTPUtils {
   def base64Encode(bytes: Array[Byte]) = javax.xml.bind.DatatypeConverter.printBase64Binary(bytes)
 
-  def urlEncode(s: String): String = URLEncoder.encode(s, "UTF-8")
+  def urlEncode(input: String): String = {
+    val resultStr = new StringBuilder()
+    for (ch <- input.toCharArray) {
+      if (isUnsafe(ch)) {
+        resultStr.append('%')
+        resultStr.append(toHex(ch / 16))
+        resultStr.append(toHex(ch % 16))
+      } else {
+        resultStr.append(ch)
+      }
+    }
+    resultStr.toString()
+  }
+
+  private def isUnsafe(ch: Char) = {
+    if (ch > 128 || ch < 0) true;
+    else " %$&+,/:;=?@<>#%!".indexOf(ch) >= 0
+  }
+
+  private def toHex(ch: Int) = (if (ch < 10) '0' + ch else 'A' + ch - 10).toChar
 
   def urlEncode(url: String, params: Map[String, String]): String = {
     val queryDelim = if (url contains "?") "&" else "?"
@@ -59,17 +78,23 @@ object HTTPUtils {
 import HTTPUtils._
 
 /** Sign URLs with OAuth version 1 signature */
-class OAuthSign(key: String, secret: String) {
+class OAuthSign(key: String, secret: String, token: String, tokenSecret: String) {
 
   private val random = new Random(System.nanoTime)
 
-  protected def newOAuthParams = Map(
-    "oauth_consumer_key"     -> key,
-    "oauth_version"          -> "1.0",
-    "oauth_signature_method" -> "HMAC-SHA1",
-    "oauth_timestamp"        -> timestamp,
-    "oauth_nonce"            -> nonce
-  )
+  protected def newOAuthParams = {
+    val params = mutable.Map(
+      "oauth_consumer_key"     -> key,
+      "oauth_version"          -> "1.0",
+      "oauth_signature_method" -> "HMAC-SHA1",
+      "oauth_timestamp"        -> timestamp,
+      "oauth_nonce"            -> nonce
+    )
+    if (token != null) {
+      params("oauth_token")= token
+    }
+    params
+  }
 
   def header(method: String, requestUrl: String, params: Map[String, String]) = {
     val oauth = newOAuthParams
@@ -96,7 +121,14 @@ class OAuthSign(key: String, secret: String) {
       sb.toString
     }
     val base = canonicalize(method, requestUrl, requestParams)
-    val keyString = urlEncode(secret)  + "&"
+    val keyString = {
+      var str = urlEncode(secret)
+      str += "&"
+      if (tokenSecret != null) {
+        str += urlEncode(tokenSecret)
+      }
+      str
+    }
     val key = new SecretKeySpec(keyString.getBytes("UTF-8"), "HmacSHA1")
     val mac = Mac.getInstance("HmacSHA1")
     mac.init(key)
@@ -252,8 +284,8 @@ class Oats(
 }
 
 // command-line parsing
-if (args.size != 3) {
-  println("Usage:  scala oats [DESTINATION_HOST] [OAUTH_KEY] [OAUTH_SECRET]")
+if (args.size < 3) {
+  println("Usage:  scala oats [DESTINATION_HOST] [OAUTH_KEY] [OAUTH_SECRET] [OAUTH_TOKEN] [OAUTH_TOKEN_SECRET]")
   println()
   println("Optional parameters:")
   println()
@@ -270,8 +302,9 @@ val port   = System.getProperty("port", "8081").toInt
 val host   = args(0)
 val key    = args(1)
 val secret = args(2)
+val token = if (args.length > 3) args(3) else null
+val tokenSecret = if (args.length > 4) args(4) else ""
 
 // application kickoff
-val oauth = new OAuthSign(key, secret)
+val oauth = new OAuthSign(key, secret, token, tokenSecret)
 new Oats(port, host, oauth, https, header)
-
